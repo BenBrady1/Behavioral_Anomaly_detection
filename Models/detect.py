@@ -55,5 +55,6 @@ print("Saved: Outputs/anomaly_detection_results.csv")
 visualize.score_distribution(df)
 visualize.confusion_heatmap(df)
 visualize.per_signal_scatter(df)
+visualize.risk_score_plot(df)
 
 print("\nPipeline complete.")

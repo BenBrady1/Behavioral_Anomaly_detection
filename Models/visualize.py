@@ -209,3 +209,36 @@ def per_signal_scatter(df):
     plt.savefig(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Outputs', 'per_signal_scatter.png'), dpi=150, bbox_inches='tight')
     plt.close()
     print("Saved: Outputs/per_signal_scatter.png")
+
+def risk_score_plot(df):
+    order = [
+        'none',
+        'session_timing',
+        'typing_speed',
+        'click_through',
+        'privilege_escalation',
+        'data_exfiltration',
+        'impossible_travel'
+    ]
+    fig, ax = plt.subplots(figsize=(12, 6))
+    sns.boxplot(
+        data=df,
+        x='anomaly_type',
+        y='composite_risk_score',
+        order=order,
+        palette=['steelblue'] + ['crimson'] * 6,
+        ax=ax
+    )
+    ax.set_xlabel('Anomaly Type', fontsize=11)
+    ax.set_ylabel('Composite Risk Score (0 = normal, 1 = maximum risk)', fontsize=11)
+    ax.set_title(
+        'Composite Risk Score Distribution by Anomaly Type\n'
+        'Combines Isolation Forest score, IF prediction, and SVM prediction',
+        fontsize=13
+    )
+    ax.tick_params(axis='x', rotation=15)
+    ax.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('Outputs/risk_score_distribution.png', dpi=150)
+    plt.close()
+    print("Saved: Outputs/risk_score_distribution.png")
