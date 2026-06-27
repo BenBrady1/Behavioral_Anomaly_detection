@@ -39,6 +39,12 @@ df, svm_model = one_class_svm.run(df, X)
 
 # 4. Evaluate both models
 evaluate.report(df)
+df = evaluate.composite_risk_score(df)
+print(df['composite_risk_score'].describe())
+
+df = evaluate.attck_taxonomy(df)
+print(df[['anomaly_type', 'attck_technique']].value_counts())
+
 
 # 5. Save enriched output
 out_path = os.path.join(os.path.dirname(__file__), '..', 'Outputs', 'anomaly_detection_results.csv')
@@ -47,7 +53,6 @@ print("Saved: Outputs/anomaly_detection_results.csv")
 
 # 6. Visualizations
 visualize.score_distribution(df)
-visualize.velocity_scatter(df)
 visualize.confusion_heatmap(df)
 visualize.per_signal_scatter(df)
 
