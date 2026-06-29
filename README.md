@@ -1,15 +1,15 @@
 # Behavioral Anomaly Detection for Identity Threat Detection
-### An Unsupervised Machine Learning Approach to MITRE ATT&CK T1078 Detection
+### A Multi-Signal, Multi-Model Approach to MITRE ATT&CK T1078 and T1041 Detection
 
 **Author:** Benjamin Brady  
 **Date:** June 2026  
-**Repository:** [github.com/BenBrady1/behavioral-anomaly-detection](https://github.com/BenBrady1/behavioral-anomaly-detection)
+**Repository:** [github.com/BenBrady1/Behavioral_Anomaly_detection](https://github.com/BenBrady1/Behavioral_Anomaly_detection)
 
 ---
 
 ## Abstract
 
-This project implements an unsupervised behavioral anomaly detection pipeline targeting identity-based threats in authentication event telemetry. Using an Isolation Forest model (Liu et al., 2008), the system detects four categories of anomalous login behavior — impossible travel, typing speed deviation, click-through rate deviation, and session timing anomalies — without requiring labeled training data. The approach maps directly to MITRE ATT&CK T1078 (Valid Accounts), one of the most prevalent techniques in real-world credential compromise attacks. Evaluated against a synthetic dataset of 3,074 login events with 74 injected ground-truth anomalies, the model achieves **92% recall** and **88% precision** at a 2.5% contamination threshold, demonstrating that multi-signal behavioral analysis can surface credential abuse with high fidelity in the absence of labeled attack data.
+This project implements a modular, unsupervised behavioral anomaly detection pipeline targeting identity-based threats in authentication event telemetry. Two complementary models — Isolation Forest (Liu et al., 2008) and One-Class SVM (Schölkopf et al., 1999) — detect six categories of anomalous login behavior across behavioral biometric, geospatial, temporal, resource access, and data transfer signal domains. Detection outputs are aggregated into a composite risk score and mapped to a formal MITRE ATT&CK taxonomy. Evaluated against a synthetic dataset of 3,100 login events with 100 injected ground-truth anomalies, Isolation Forest achieves **97% recall** and **94% precision**, and One-Class SVM achieves **84% recall** and **83% precision**, demonstrating meaningful tradeoffs between the two approaches on clean behavioral telemetry.
 
 ---
 
@@ -37,31 +37,45 @@ Unsupervised anomaly detection sidesteps this constraint by modeling the distrib
 
 The dataset was generated synthetically to enable rigorous evaluation with known ground truth labels, following standard practice in anomaly detection benchmarking where real behavioral data is not publicly available due to privacy constraints.
 
-The generator (`Data/generate_data.py`) produces authentication event telemetry for 50 simulated users over approximately 60 login events each (two months of daily logins), yielding 3,000 normal baseline events. Each user is assigned a home city drawn from a pool of eight U.S. metropolitan areas, a baseline typing speed drawn from N(65, 8) WPM, a baseline click-through rate drawn from N(0.35, 0.05), and a characteristic login hour drawn from U[7, 10].
+The generator (`Data/generate_data.py`) produces authentication event telemetry for 50 simulated users over approximately 60 login events each (two months of daily logins), yielding 3,000 normal baseline events. Each user is assigned a home city drawn from a pool of eight U.S. metropolitan areas, a baseline typing speed drawn from N(65, 8) WPM, a baseline click-through rate drawn from N(0.35, 0.05), a characteristic login hour drawn from U[7, 10], a baseline resource access count drawn from U[2, 5], and a baseline data transfer volume drawn from U[0.5, 10.0] MB.
 
 ### 2.2 Anomaly Injection
 
-74 anomalies were injected across four categories, chosen to reflect the behavioral signals described in the MITRE ATT&CK T1078 detection guidance:
+100 anomalies were injected across six categories, chosen to reflect behavioral signals described in MITRE ATT&CK T1078 and T1041 detection guidance:
 
-| Anomaly Type | Count | Description |
-|---|---|---|
-| Impossible Travel | 30 | Login from a geographically distant city within 5–30 minutes of the last domestic login, implying physically impossible transit velocity |
-| Typing Speed Deviation | 18 | Typing speed far below baseline (attacker unfamiliar with system) or far above baseline (scripted/automated access) |
-| Click-Through Rate Deviation | 15 | CTR near zero (bot-like navigation) or near 1.0 (scripted enumeration) |
-| Session Timing Anomaly | 11 | Login between 1–4 AM, outside the user's established baseline hours |
-| **Total** | **74** | **Anomaly rate: 2.41%** |
+| Anomaly Type | Count | ATT&CK | Description |
+|---|---|---|---|
+| Impossible Travel | 30 | T1078 | Login from a geographically distant city within 5–30 minutes of the last domestic login, implying physically impossible transit velocity |
+| Typing Speed Deviation | 20 | T1078 | Typing speed far below baseline (attacker unfamiliar with system) or far above baseline (scripted/automated access) |
+| Click-Through Rate Deviation | 15 | T1078 | CTR near zero (bot-like navigation) or near 1.0 (scripted enumeration) |
+| Session Timing Anomaly | 15 | T1078 | Login between 1–4 AM, outside the user's established baseline hours |
+| Privilege Escalation | 10 | T1078 | Abnormal spike in unique resources accessed per session (20–50 vs. normal 2–5) |
+| Data Exfiltration | 10 | T1041 | Abnormally large data transfer volume (500–2,000 MB vs. normal 0.5–10 MB) |
+| **Total** | **100** | | **Anomaly rate: 3.23%** |
 
-The 2.41% anomaly rate is consistent with reported base rates in enterprise authentication telemetry (Chandola et al., 2009).
-
-Impossible travel cities were drawn from a pool of four international locations (Beijing, Moscow, Lagos, Tehran). The implied transit velocity for each impossible travel event — computed via the Haversine great-circle distance formula between the home city and the anomaly city, divided by the elapsed time in hours — ranges from approximately 8,000 to 94,000 km/h, well exceeding the ~1,200 km/h threshold of commercial aviation.
+The 3.23% anomaly rate is consistent with reported base rates in enterprise authentication telemetry (Chandola et al., 2009).
 
 ---
 
 ## 3. Methodology
 
-### 3.1 Feature Engineering
+### 3.1 Pipeline Architecture
 
-Six behavioral features were derived from the raw event log for each login event:
+The pipeline is implemented as a modular Python package with one file per concern:
+
+```
+Models/
+├── detect.py            — orchestrator: runs pipeline in sequence
+├── features.py          — data ingestion and feature engineering
+├── isolation_forest.py  — Isolation Forest model
+├── one_class_svm.py     — One-Class SVM model
+├── evaluate.py          — classification reports, risk scoring, ATT&CK taxonomy
+└── visualize.py         — all output visualizations
+```
+
+### 3.2 Feature Engineering
+
+Eight behavioral features were derived from the raw event log:
 
 | Feature | Description | Anomaly Signal |
 |---|---|---|
@@ -71,93 +85,140 @@ Six behavioral features were derived from the raw event log for each login event
 | `hours_since_last_login` | Elapsed hours since prior login by same user | Unusually short interval preceding impossible travel |
 | `distance_from_last_login` | Great-circle distance in km from prior login location | Large distance = potential impossible travel |
 | `velocity_kmh` | Implied transit speed (distance / time) | Values exceeding ~1,200 km/h indicate impossible travel |
+| `resources_accessed` | Count of unique resources accessed per session | Spike indicates lateral movement / privilege escalation |
+| `data_volume_mb` | Data transferred in session (MB) | Spike indicates potential exfiltration |
 
-Sequential features (`hours_since_last_login`, `distance_from_last_login`, `velocity_kmh`) were derived by sorting events by user and timestamp, then using the pandas `shift(1)` operation to retrieve the immediately preceding event within each user context. First login events per user produce NaN for sequential features, imputed with zero — representing the absence of a prior baseline rather than a meaningful behavioral measurement.
+Sequential features were derived using the pandas `shift(1)` operation within each user group. First login events per user produce NaN, imputed with zero.
 
 The Haversine formula was used for all distance calculations:
 
 ```
-d = 2R · arcsin(√(sin²(Δlat/2) + cos(lat₁)·cos(lat₂)·sin²(Δlon/2)))
+d = 2R · arcsin(sqrt(sin²(Δlat/2) + cos(lat₁)·cos(lat₂)·sin²(Δlon/2)))
 ```
 
 where R = 6,371 km (mean Earth radius).
 
-### 3.2 Model: Isolation Forest
+### 3.3 Model 1 — Isolation Forest
 
-The Isolation Forest algorithm (Liu, Ting & Zhou, 2008) was selected for the following properties:
+The Isolation Forest algorithm (Liu, Ting & Zhou, 2008) detects anomalies by recursively partitioning the feature space using random splits. Anomalous observations, being few and distinct, are isolated in fewer splits than normal observations, yielding shorter average path lengths across the ensemble of trees.
 
-**Isolation principle:** Anomalies are few and different. In a random partitioning of the feature space, anomalous observations — sitting in sparse regions — are isolated in fewer splits than normal observations, which cluster densely and require many splits to separate. The anomaly score is derived from the average path length to isolation across an ensemble of trees: shorter average path = higher anomaly likelihood.
+**Configuration:** `n_estimators=100`, `contamination=0.033`, `random_state=42`
 
-**Unsupervised:** No labeled attack data is required. The model learns the structure of normal behavior implicitly from the full dataset.
+### 3.4 Model 2 — One-Class SVM
 
-**Scalability:** Linear time complexity O(n) with a low memory footprint, appropriate for high-throughput authentication telemetry.
+One-Class SVM (Schölkopf et al., 1999) learns a decision boundary around normal data in a kernel-transformed feature space via the RBF kernel. Points falling outside the boundary are classified as anomalous.
 
-**No distributional assumption:** Unlike statistical methods that assume normality, Isolation Forest makes no assumption about the underlying distribution — important given the multimodal nature of behavioral features across users.
+**Configuration:** `kernel='rbf'`, `nu=0.033`
 
-**Model configuration:**
-- `n_estimators = 100` (ensemble size per Liu et al., 2008 recommendation)
-- `contamination = 0.025` (approximation of the known 2.41% anomaly rate)
-- `random_state = 42` (full reproducibility)
+**Model comparison rationale:** Isolation Forest is the primary model for its linear time complexity O(n), scalability to high-dimensional data, and lack of distributional assumptions. One-Class SVM is included as a comparative model — it produces tighter boundaries on clean data but is computationally heavier and less scalable to production telemetry volumes.
 
-Anomaly scores are returned as raw values by sklearn's `score_samples()` method: more negative values indicate shorter average isolation paths and higher anomaly likelihood. Scores are retained in raw form without sign inversion.
+### 3.5 Composite Risk Score
+
+Detection outputs from both models are aggregated into a single continuous risk score per event:
+
+```
+composite_risk_score = (anomaly_score_normalized × 0.5) +
+                       (if_predicted_binary × 0.25) +
+                       (svm_predicted_binary × 0.25)
+```
+
+The Isolation Forest anomaly score is min-max normalized to [0, 1] and inverted so that higher values indicate greater anomaly likelihood. The continuous score receives 50% weight; each binary model prediction receives 25%, reflecting the information advantage of a continuous signal over a binary classification.
+
+### 3.6 ATT&CK Taxonomy
+
+Each event is tagged with a formal MITRE ATT&CK technique ID in the output:
+
+| Anomaly Type | Technique |
+|---|---|
+| impossible_travel, typing_speed, click_through, session_timing, privilege_escalation | T1078 — Valid Accounts |
+| data_exfiltration | T1041 — Exfiltration Over C2 Channel |
+| none (normal) | N/A |
 
 ---
 
 ## 4. Results
 
-### 4.1 Classification Performance
-
-Evaluated against ground truth labels on the full dataset:
+### 4.1 Isolation Forest — Classification Performance
 
 ```
               precision    recall  f1-score   support
 
            0       1.00      1.00      1.00      3000
-           1       0.88      0.92      0.90        74
+           1       0.94      0.97      0.96       100
 
-    accuracy                           1.00      3074
-   macro avg       0.94      0.96      0.95      3074
-weighted avg       1.00      1.00      1.00      3074
+    accuracy                           1.00      3100
+   macro avg       0.97      0.98      0.98      3100
+weighted avg       1.00      1.00      1.00      3100
 ```
 
-**Confusion Matrix (normalized by actual class):**
+**Confusion Matrix:** 2,994 true negatives | 97 true positives | 6 false positives | 3 false negatives
 
-|  | Predicted Normal | Predicted Anomaly |
+### 4.2 One-Class SVM — Classification Performance
+
+```
+              precision    recall  f1-score   support
+
+           0       0.99      0.99      0.99      3000
+           1       0.83      0.84      0.84       100
+
+    accuracy                           0.99      3100
+   macro avg       0.91      0.92      0.92      3100
+weighted avg       0.99      0.99      0.99      3100
+```
+
+**Confusion Matrix:** 2,983 true negatives | 84 true positives | 17 false positives | 16 false negatives
+
+### 4.3 Model Comparison
+
+| Metric | Isolation Forest | One-Class SVM |
 |---|---|---|
-| **Actual Normal** | 1.00 (2,991) | 0.00 (9) |
-| **Actual Anomaly** | 0.08 (6) | 0.92 (68) |
+| Precision | 0.94 | 0.83 |
+| Recall | 0.97 | 0.84 |
+| F1 Score | 0.96 | 0.84 |
+| False Positives | 6 | 17 |
+| False Negatives | 3 | 16 |
 
-The model correctly identified 68 of 74 injected anomalies (92% recall) with 9 false positives from the 3,000 normal events (0.3% false positive rate). In production security contexts, recall is the primary optimization target: a missed attack (false negative) has greater consequence than a false alarm (false positive). A 92% recall rate on an unsupervised model with no labeled training data is a meaningful result.
+Isolation Forest outperforms One-Class SVM across all metrics on this dataset. This is consistent with the literature: Isolation Forest's random partitioning approach is less sensitive to the shape of the feature distribution than SVM's boundary-learning approach, making it more robust on multimodal behavioral data.
 
-### 4.2 Score Distribution
+**Note on performance inflation:** Both models show elevated metrics attributable to the clean distributional separation inherent in synthetic data. Real authentication telemetry exhibits correlated noise, overlapping behavioral profiles, and gradual drift that would reduce precision and recall in production. These results should be interpreted as proof-of-concept validation, not production performance estimates.
+
+### 4.4 Composite Risk Score Distribution
+
+![Risk Score Distribution](Outputs/risk_score_distribution.png)
+
+Normal events cluster tightly near zero. Impossible travel shows the tightest, highest distribution — most confidently detected. Privilege escalation shows the widest spread, reflecting the subtler nature of the resource access signal and higher model uncertainty at the detection boundary.
+
+### 4.5 Anomaly Score Distribution
 
 ![Score Distribution](Outputs/score_distribution.png)
 
-The anomaly score distributions for normal and anomalous events show clear separation: normal events cluster around -0.40 to -0.55, while anomalous events concentrate below -0.60, with impossible travel events reaching -0.79. The overlap region corresponds to the 6 false negatives and 9 false positives.
+Clear separation between normal and anomalous Isolation Forest score distributions confirms the learned feature space meaningfully discriminates between the two classes.
 
-### 4.3 Velocity vs. Anomaly Score
+### 4.6 Per-Signal Scatter Plots
 
-![Velocity vs Score](Outputs/velocity_vs_score.png)
+![Per Signal Scatter](Outputs/per_signal_scatter.png)
 
-The scatter plot illustrates the dominant contribution of impossible travel to the detection signal. Normal events cluster at near-zero velocity with scores around -0.40 to -0.55 (blue). Behavioral anomalies (typing speed, CTR, session timing) appear at near-zero velocity with more negative scores (orange, left cluster) — caught by behavioral signals despite no location change. Impossible travel anomalies extend to the right with velocities ranging from ~8,000 to ~94,000 km/h and anomaly scores approaching -0.80, confirming the model's sensitivity to geospatial velocity.
+Six panels isolating each anomaly type against its primary detection signal.
 
-The orange points at low velocity represent a significant finding: **behavioral signals detect credential abuse even when the attacker masks their location.** A sophisticated adversary using a VPN or proxy to simulate their victim's geographic location would evade impossible travel detection but remain detectable through typing cadence or click-pattern deviations.
+### 4.7 Confusion Matrix
+
+![Confusion Matrix](Outputs/confusion_matrix.png)
 
 ---
 
 ## 5. Limitations
 
-The following limitations are acknowledged and should inform any production application of this approach:
+1. **Synthetic data:** Clean distributional separation inflates model performance relative to production expectations. Real telemetry requires empirical re-evaluation.
 
-1. **Synthetic data:** The dataset was generated under controlled probabilistic assumptions. Real authentication telemetry exhibits correlated noise, irregular login patterns (travel, shift work, shared devices), and a higher diversity of behavioral profiles. Model performance on real data would require separate empirical evaluation.
+2. **No per-user behavioral baseline:** A production system must maintain per-user baselines. A 3 AM login is anomalous for most users but normal for an overnight security analyst.
 
-2. **No per-user behavioral baseline:** This implementation trains a single population-level model. A production system should maintain per-user behavioral baselines and score deviations relative to each user's individual history — not the population mean. A 3 AM login is anomalous for most users but normal for a security analyst on overnight rotation.
+3. **Static contamination parameter:** In production, the true anomaly rate is unknown and requires adaptive estimation.
 
-3. **Static contamination parameter:** The `contamination` parameter was set using known dataset properties. In production, the true anomaly rate is unknown and may vary seasonally, by user population, or following security incidents. Adaptive contamination estimation would be required.
+4. **No temporal model:** Isolation Forest treats each event independently. Production systems incorporate session-level sequences and behavioral drift over time.
 
-4. **No temporal model:** Isolation Forest treats each event independently. A production behavioral system would incorporate temporal sequence modeling — session-level patterns, login frequency trends, and behavioral drift over time — which this implementation does not capture.
+5. **Feature set scope:** Eight features modeled here are a subset of production telemetry. Production systems include device fingerprinting, network characteristics, and IdP risk signals.
 
-5. **Feature set scope:** The six features modeled represent a subset of the behavioral signals available in enterprise authentication telemetry. Production systems typically incorporate device fingerprinting, network characteristics, application access patterns, and identity provider risk signals.
+6. **No held-out test set:** Both models were evaluated on their training data. Cross-validation or a held-out test set would provide more conservative performance estimates.
 
 ---
 
@@ -165,13 +226,15 @@ The following limitations are acknowledged and should inform any production appl
 
 Liu, F. T., Ting, K. M., & Zhou, Z. H. (2008). Isolation Forest. *Proceedings of the IEEE International Conference on Data Mining*, 413–422.
 
+Schölkopf, B., Platt, J. C., Shawe-Taylor, J., Smola, A. J., & Williamson, R. C. (1999). Support vector method for novelty detection. *Advances in Neural Information Processing Systems*, 12.
+
 MITRE ATT&CK. (2024). *Valid Accounts (T1078)*. https://attack.mitre.org/techniques/T1078/
 
-NIST Special Publication 800-207. (2020). *Zero Trust Architecture*. National Institute of Standards and Technology. https://csrc.nist.gov/pubs/sp/800/207/final
+MITRE ATT&CK. (2024). *Exfiltration Over C2 Channel (T1041)*. https://attack.mitre.org/techniques/T1041/
+
+NIST Special Publication 800-207. (2020). *Zero Trust Architecture*. https://csrc.nist.gov/pubs/sp/800/207/final
 
 Chandola, V., Banerjee, A., & Kumar, V. (2009). Anomaly detection: A survey. *ACM Computing Surveys*, 41(3), 1–58.
-
-Schölkopf, B., Platt, J. C., Shawe-Taylor, J., Smola, A. J., & Williamson, R. C. (2001). Estimating the support of a high-dimensional distribution. *Neural Computation*, 13(7), 1443–1471.
 
 ---
 
@@ -181,11 +244,37 @@ Python 3.12 · pandas · scikit-learn · matplotlib · seaborn · NumPy
 
 ---
 
-## 8. Reproduce
+## 8. Project Structure
+
+```
+Behavioral_Anomaly_detection/
+├── Data/
+│   ├── generate_data.py     — synthetic dataset generator
+│   └── login_events.csv     — generated dataset (3,100 events)
+├── Models/
+│   ├── detect.py            — pipeline orchestrator
+│   ├── features.py          — feature engineering
+│   ├── isolation_forest.py  — Isolation Forest model
+│   ├── one_class_svm.py     — One-Class SVM model
+│   ├── evaluate.py          — evaluation, risk scoring, ATT&CK taxonomy
+│   └── visualize.py         — visualizations
+├── Outputs/
+│   ├── anomaly_detection_results.csv
+│   ├── score_distribution.png
+│   ├── confusion_matrix.png
+│   ├── per_signal_scatter.png
+│   └── risk_score_distribution.png
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## 9. Reproduce
 
 ```bash
-git clone https://github.com/BenBrady1/behavioral-anomaly-detection
-cd behavioral-anomaly-detection
+git clone https://github.com/BenBrady1/Behavioral_Anomaly_detection
+cd Behavioral_Anomaly_detection
 pip install -r requirements.txt
 python Data/generate_data.py
 python Models/detect.py
